@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lucky Spin Wheel</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background: #1a1a2e;
+            color: #fff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            background: #16162a;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            width: 100%;
+            max-width: 500px;
+            text-align: center;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Form Styles */
+        h2 { margin-bottom: 20px; color: #00fff0; }
+        input {
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            border: none;
+            border-radius: 8px;
+            background: #222244;
+            color: #fff;
+            font-size: 16px;
+        }
+        button {
+            width: 100%;
+            padding: 12px;
+            background: #00fff0;
+            color: #1a1a2e;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.3s;
+            margin-top: 10px;
+        }
+        button:hover { background: #00b3a8; }
+        .error { color: #ff4d4d; font-size: 14px; margin-top: 5px; }
+
+        /* Dashboard & Game Styles */
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            background: #222244;
+            padding: 10px 15px;
+            border-radius: 8px;
+        }
+        .user-info { font-weight: bold; color: #00fff0; }
+        .points-info { font-weight: bold; color: #ffee00; }
+
+        /* Spin Wheel Canvas */
+        .wheel-container {
+            position: relative;
+            width: 320px;
+            height: 320px;
+            margin: 30px auto;
+        }
+        /* Jarum Penunjuk */
+        .wheel-container::before {
+            content: '';
+            position: absolute;
+            top: -15px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 0;
+            height: 0;
+            border-left: 15px solid transparent;
+            border-right: 15px solid transparent;
+            border-top: 25px solid #ff4d4d;
+            z-index: 10;
+        }
+        canvas {
+            border-radius: 50%;
+            box-shadow: 0 0 20px rgba(0,255,240,0.3);
+            transition: transform 4s cubic-bezier(0.1, 0.8, 0.1, 1);
+        }
+
+        /* Admin Panel */
+        .admin-panel {
+            margin-top: 25px;
+            padding: 20px;
+            background: #2a1a3a;
+            border: 2px dashed #ff00ff;
+            border-radius: 10px;
+        }
+        .admin-panel h3 { color: #ff00ff; margin-bottom: 10px; }
+        .logout-btn { background: #ff4d4d; color: white; margin-top: 15px; }
+        .logout-btn:hover { background: #cc3333; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div id="auth-page">
+            <h2>Masuk / Buat Akun</h2>
+            <input type="text" id="username-input" placeholder="Masukkan Username..." autocomplete="off">
+            <div id="auth-error" class="error"></div>
+            <button onclick="handleAuth()">Masuk</button>
+        </div>
+
+        <div id="game-page" class="hidden">
+            <div class="status-bar">
+                <span class="user-info">Halo, <span id="display-username"></span></span>
+                <span class="points-info">Poin: <span id="display-points">0</span></span>
+            </div>
+
+            <div class="wheel-container">
+                <canvas id="wheel" width="320" height="320"></canvas>
+            </div>
+
+            <button id="spin-btn" onclick="spinWheel()">SPIN (5 Poin)</button>
+            <div id="spin-result" style="margin-top: 15px; font-weight: bold; font-size: 18px;"></div>
+
+            <div id="admin-panel" class="admin-panel hidden">
+                <h3>Panel Admin (Kirim Poin)</h3>
+                <input type="text" id="target-user" placeholder="Username Target...">
+                <input type="number" id="gift-amount" placeholder="Jumlah Poin..." min="1">
+                <div id="admin-msg" class="error" style="color: #00fff0;"></div>
+                <button onclick="sendPoints()" style="background: #ff00ff; color: white;">Kirim Poin</button>
+            </div>
+
+            <button class="logout-btn" onclick="logout()">Keluar</button>
+        </div>
+    </div>
+
+    <script>
+        // Data Hadiah (Ukuran Juring Sama = masing-masing 72 derajat)
+        const prizes = [
+            { name: "Zonk", weight: 90 },
+            { name: "70 Diamond", weight: 3 },
+            { name: "Uang 20 Ribu", weight: 2 },
+            { name: "Uang 5 Ribu", weight: 4 },
+            { name: "Akun SG", weight: 1 }
+        ];
+        
+        const colors = ["#34495e", "#9b59b6", "#e67e22", "#111", "#e74c3c"];
+        
+        let currentUser = null;
+        let isSpinning = false;
+
+        // Inisialisasi Database Lokal & Akun Admin bawaan saat web dimuat
+        if (!localStorage.getItem('wheel_users')) {
+            const initialUsers = {
+                "admin12333": { username: "admin12333", points: 100 }
+            };
+            localStorage.setItem('wheel_users', JSON.stringify(initialUsers));
+        }
+
+        // Gambar Roda di Canvas
+        const canvas = document.getElementById('wheel');
+        const ctx = canvas.getContext('2d');
+        const size = prizes.length;
+        const arc = Math.PI * 2 / size;
+
+        function drawWheel() {
+            for (let i = 0; i < size; i++) {
+                const angle = i * arc;
+                ctx.fillStyle = colors[i];
+                ctx.beginPath();
+                ctx.moveTo(160, 160);
+                ctx.arc(160, 160, 160, angle, angle + arc);
+                ctx.lineTo(160, 160);
+                ctx.fill();
+
+                // Tambahkan Teks Hadiah
+                ctx.save();
+                ctx.fillStyle = "#fff";
+                ctx.translate(160, 160);
+                ctx.rotate(angle + arc / 2);
+                ctx.textAlign = "right";
+                ctx.font = "bold 14px Arial";
+                ctx.fillText(prizes[i].name, 140, 5);
+                ctx.restore();
+            }
+        }
+        drawWheel();
+
+        // Fitur Autentikasi (Login/Daftar)
+        function handleAuth() {
+            const usernameInput = document.getElementById('username-input').value.trim();
+            const errorDiv = document.getElementById('auth-error');
+            
+            if (!usernameInput) {
+                errorDiv.innerText = "Username tidak boleh kosong!";
+                return;
+            }
+
+            let users = JSON.parse(localStorage.getItem('wheel_users'));
+
+            if (users[usernameInput]) {
+                // Jika user ditemukan, langsung masuk (Login)
+                currentUser = users[usernameInput];
+            } else {
+                // Jika user belum ada, daftarkan akun baru (Otomatis dapat bonus 20 poin awal)
+                currentUser = { username: usernameInput, points: 20 };
+                users[usernameInput] = currentUser;
+                localStorage.setItem('wheel_users', JSON.stringify(users));
+            }
+
+            errorDiv.innerText = "";
+            showGamePage();
+        }
+
+        // Tampilkan halaman game utama
+        function showGamePage() {
+            document.getElementById('auth-page').classList.add('hidden');
+            document.getElementById('game-page').classList.remove('hidden');
+            document.getElementById('display-username').innerText = currentUser.username;
+            updatePointsDisplay();
+
+            // Cek jika yang login adalah admin khusus
+            if (currentUser.username === 'admin12333') {
+                document.getElementById('admin-panel').classList.remove('hidden');
+            } else {
+                document.getElementById('admin-panel').classList.add('hidden');
+            }
+        }
+
+        function updatePointsDisplay() {
+            document.getElementById('display-points').innerText = currentUser.points;
+        }
+
+        // Logika Pengundian berdasarkan Persentase (RNG berbasis berat/weight)
+        function getRandomPrizeIndex() {
+            const totalWeight = prizes.reduce((sum, prize) => sum + prize.weight, 0);
+            let random = Math.random() * totalWeight;
+            
+            for (let i = 0; i < prizes.length; i++) {
+                if (random < prizes[i].weight) {
+                    return i;
+                }
+                random -= prizes[i].weight;
+            }
+            return 0;
+        }
+
+        // Fitur Putar Roda
+        function spinWheel() {
+            if (isSpinning) return;
+
+            // Ambil data terbaru dari penyimpanan agar sinkron
+            let users = JSON.parse(localStorage.getItem('wheel_users'));
+            currentUser = users[currentUser.username];
+
+            if (currentUser.points < 5) {
+                document.getElementById('spin-result').style.color = '#ff4d4d';
+                document.getElementById('spin-result').innerText = "Poin tidak cukup! Butuh 5 poin.";
+                return;
+            }
+
+            isSpinning = true;
+            document.getElementById('spin-result').innerText = "Memutar...";
+            
+            // Kurangi 5 poin
+            currentUser.points -= 5;
+            users[currentUser.username] = currentUser;
+            localStorage.setItem('wheel_users', JSON.stringify(users));
+            updatePointsDisplay();
+
+            // Tentukan index hadiah berdasarkan persentase asli
+            const prizeIndex = getRandomPrizeIndex();
+            
+            // Hitung derajat rotasi agar jarum tepat berhenti di juring hadiah tersebut
+            // Canvas digambar dari arah jam 3, jarum penunjuk ada di arah jam 12 (top)
+            const degreesPerSegment = 360 / size;
+            const targetAngle = 270 - (prizeIndex * degreesPerSegment) - (degreesPerSegment / 2);
+            const extraRotations = 360 * 5; // Putar 5 kali putaran penuh agar estetik
+            const totalRotation = extraRotations + targetAngle;
+
+            canvas.style.transform = `rotate(${totalRotation}deg)`;
+
+            setTimeout(() => {
+                isSpinning = false;
+                const finalPrize = prizes[prizeIndex].name;
+                
+                document.getElementById('spin-result').style.color = '#ffee00';
+                document.getElementById('spin-result').innerText = `Selamat! Anda mendapatkan: ${finalPrize}`;
+                
+                // Tambahan logika jika hadiah memicu perubahan poin (opsional, saat ini hanya display teks)
+                canvas.style.transition = 'none';
+                canvas.style.transform = `rotate(${targetAngle}deg)`;
+                setTimeout(() => { canvas.style.transition = 'transform 4s cubic-bezier(0.1, 0.8, 0.1, 1)'; }, 50);
+            }, 4000);
+        }
+
+        // FITUR ADMIN PANEL: Kirim Poin Ke User Lain
+        function sendPoints() {
+            const targetInput = document.getElementById('target-user').value.trim();
+            const amountInput = parseInt(document.getElementById('gift-amount').value);
+            const msgDiv = document.getElementById('admin-msg');
+
+            if (!targetInput || isNaN(amountInput) || amountInput <= 0) {
+                msgDiv.style.color = '#ff4d4d';
+                msgDiv.innerText = "Input target atau jumlah poin tidak valid!";
+                return;
+            }
+
+            let users = JSON.parse(localStorage.getItem('wheel_users'));
+
+            if (!users[targetInput]) {
+                msgDiv.style.color = '#ff4d4d';
+                msgDiv.innerText = `User "${targetInput}" tidak ditemukan!`;
+                return;
+            }
+
+            // Tambahkan poin ke user tujuan
+            users[targetInput].points += amountInput;
+            localStorage.setItem('wheel_users', JSON.stringify(users));
+
+            msgDiv.style.color = '#00fff0';
+            msgDiv.innerText = `Berhasil mengirim ${amountInput} poin ke ${targetInput}!`;
+
+            // Bersihkan input form admin
+            document.getElementById('target-user').value = '';
+            document.getElementById('gift-amount').value = '';
+        }
+
+        // Fitur Keluar Akun
+        function logout() {
+            currentUser = null;
+            document.getElementById('username-input').value = '';
+            document.getElementById('game-page').classList.add('hidden');
+            document.getElementById('auth-page').classList.remove('hidden');
+        }
+    </script>
+</body>
+</html>
